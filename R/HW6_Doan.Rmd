@@ -1,0 +1,289 @@
+---
+title: "Homework #6 — First Presidential Debate 2020"
+author: "Stan Doan"
+date: "10/4/2020"
+output: pdf_document
+always_allow_html: yes
+---
+
+```{r include=FALSE}
+source('configuration.R')
+```
+
+# Problem 1
+See `data_munge.R` below.
+
+# Problem 2
+  
+## (a) `get_word_counts(d, speaker)`
+  
+I wrote two other functions, one to split statements into words, `get_split_sen(d, speaker)`, and one to "clean" those words, `clean_words(words)`. The reason for the latter is to count different forms and tenses of one word as one word. For example, _prosecute_, _prosecuted_, and _prosecuting_ will be uniformly counted as _prosecute_. This process also helps reduce unnecessary counting, especially for words like _doesn't_, _I'll_, _they're_, which are in fact _do_, _I_, and _they_, respectively. The variants of _be_, like _are_, _wasn't_, _being_, and _been_, also make a good example as to how cleaning improves my answer to Problem 3.
+```{r}
+debate <- get_debate()
+head(get_word_counts(debate, "biden"))
+```
+
+## (b) `total_word_counts(d, speakers)`
+```{r}
+bidenWallace <- total_word_counts(debate, c("Wallace", "Biden")) %>%
+  arrange(desc(count))
+head(bidenWallace)
+```
+
+# Problem 3
+
+## Cleaning Data (`clean_words(words)`)
+
+I use a dataset of English verb forms (`raw_data/english_verbs.csv`) to identify verbs in the transcript and convert their conjugations into original form. A more advanced approach includes different forms of nouns and adjectives, but I haven't got there yet.
+
+```{r}
+words <- c("Apple", "faked", "been", "went", "they’re")
+clean_words(words)
+```
+
+## Ranking Words
+
+There are four points of reference in my word-ranking algorithm: Trump, Biden, Wallace, and the English speakers. Words the first three said are recorded in the transcript, and the most common English words are given in `word_frequency.csv`. I extract these data and store them in a frame with three columns: `speaker`, `word`, and `count`. I then employ the _term frequency — inverse document frequency_ [method](https://www.tidytextmining.com/tfidf.html) in package `tidytext` to rank words based on (1) how often they are spoken (higher is better), and (2) how many "people" (out of four) often speak them (lower is better). In other words, words are deemed more characteristic of a person if he/she uses them more frequently, and less so if they are also used by other people.
+
+After refining word data and contrasting speakers' lexicons with each other, here is the results.
+```{r  warning = F}
+whatBidenSaid <- prepare_word_cloud(debate, "biden")
+head(whatBidenSaid)
+```
+
+```{r  warning = F}
+whatTrumpSaid <- prepare_word_cloud(debate, "trump")
+head(whatTrumpSaid)
+```
+
+\pagebreak
+
+The wordclouds.
+```{r warning = F, cache = T}
+bidenWC <- wordcloud2(whatBidenSaid, size = 1.5, color = "random-light") %>%
+  saveWidget("../images/biden.html", selfcontained = F)
+webshot("../images/biden.html", "../images/biden.png", delay = 5, 
+        vwidth = 2000, vheight = 1000)
+```
+
+```{r warning = F, cache = T}
+trumpWC <- wordcloud2(whatTrumpSaid, size = 1.5, color = "random-dark") %>%
+  saveWidget("../images/trump.html", selfcontained = F)
+webshot("../images/trump.html", "../images/trump.png", delay = 5, 
+        vwidth = 2000, vheight = 1000)
+```
+
+\pagebreak
+
+## Weighting
+
+### Without Wallace
+
+As a moderator, Wallace is probably the least relevant among the four points of reference. Here's the results when I filter out Wallace.
+
+```{r  warning = F, cache = T}
+whatBidenSaid <- prepare_word_cloud(debate, "biden", wallace = F)
+bidenWC <- wordcloud2(whatBidenSaid, size = 1.5, color = "random-light") %>%
+  saveWidget("../images/biden_without_wallace.html", selfcontained = F)
+webshot("../images/biden_without_wallace.html", "../images/biden_without_wallace.png", 
+        delay = 5, vwidth = 2000, vheight = 750)
+```
+
+```{r  warning = F, cache = T}
+whatTrumpSaid <- prepare_word_cloud(debate, "trump", wallace = F)
+trumpWC <- wordcloud2(whatTrumpSaid, size = 1.5, color = "random-dark") %>%
+  saveWidget("../images/trump_without_wallace.html", selfcontained = F)
+webshot("../images/trump_without_wallace.html", "../images/trump_without_wallace.png", 
+        delay = 5, vwidth = 2000, vheight = 750)
+```
+
+\pagebreak
+
+### Change Weight of the English speakers
+
+Set weight of the most common words `weightCommon` to 0.00001. I think this method yields the best results, as most trivial words, like _sure_ and _man_, are removed, but important common words like _destroy_ are kept.
+
+```{r  warning = F, cache = T}
+whatBidenSaid <- prepare_word_cloud(debate, "biden", weightCommon = 0.00001)
+bidenWC <- wordcloud2(whatBidenSaid, size = 1.5, color = "random-light") %>%
+  saveWidget("../images/biden_deweight_common.html", selfcontained = F)
+webshot("../images/biden_deweight_common.html", "../images/biden_deweight_common.png", 
+        delay = 5, vwidth = 2000, vheight = 750)
+```
+
+```{r  warning = F, cache = T}
+whatTrumpSaid <- prepare_word_cloud(debate, "trump", weightCommon = 0.00001)
+trumpWC <- wordcloud2(whatTrumpSaid, size = 1.5, color = "random-dark") %>%
+  saveWidget("../images/trump_deweight_common.html", selfcontained = F)
+webshot("../images/trump_deweight_common.html", "../images/trump_deweight_common.png", 
+        delay = 5, vwidth = 2000, vheight = 750)
+```
+
+\pagebreak
+
+# Code
+
+`data_munge.R`
+```{r eval = F, echo = T}
+#Transcipt to Dataset
+transcript <- file("../processed_data/Presidential_Debate_Transcript_processed.txt", "r")
+lines <- readLines(transcript)
+
+d <- data.frame(linenumber = "2", speaker = "WALLACE", statement = lines[2],
+                time = "1min20sec", stringsAsFactors = F)
+spkrNames <- c("WALLACE", "TRUMP", "BIDEN")
+
+for (i in seq(5, length(lines), 3)) {
+  spkrDetect <- str_detect(lines[i-1], c("Wallace: ", "Trump: ", "Biden: "))
+  thisSpeaker <- spkrNames[ which(spkrDetect %in% TRUE) ]
+  
+  timestamp <- str_sub(lines[i-1], str_locate(c(lines[i-1]), "\\(")[1]+1, 
+                       str_locate(lines[i-1], "\\)")[1])
+  str_replace(timestamp, ":", "XX") %>% str_replace("\\)","sec") -> timestamp
+  if (all(str_detect(timestamp, c("XX",":")))) {
+    str_replace(timestamp, "XX", "hour") %>% str_replace(":", "min") -> timestamp
+  } else str_replace(timestamp, "XX", "min") -> timestamp
+  
+  d[nrow(d) + 1,] <- c(paste(i), thisSpeaker, lines[i], timestamp)
+}
+
+write.csv(d, "../processed_data/pres_debate.csv", row.names = F)
+
+#Word Frequency
+word_freq <- read.csv("../raw_data/word_frequency.csv", header = T, stringsAsFactors = F)
+
+select(word_freq, -Rank, -Part.of.speech, -Dispersion) -> word_freq
+names(word_freq) <- c("word", "count")
+dplyr::mutate_all(word_freq, funs(toupper)) -> word_freq
+word_freq$count <- as.integer(word_freq$count)
+str_remove_all(word_freq$word, "[[:space:]]") -> word_freq$word
+
+write.csv(word_freq, "../processed_data/word_frequency_processed.csv", row.names = F)
+
+#English Verbs
+verbs <- read.csv("../raw_data/english_verbs.csv", header = F, 
+                  stringsAsFactors = F, fileEncoding="latin1")
+
+c("v1", "v2", "v3", "v4", "v5") -> names(verbs)
+dplyr::mutate_all(verbs, funs(toupper)) -> verbs
+
+write.csv(verbs, "../processed_data/english_verbs_processed.csv", row.names = F)
+```
+
+`configuration.R`
+```{r eval = F, echo = T}
+library(wordcloud2)
+library(webshot)
+library(htmlwidgets)
+library(tidyverse)
+library(magrittr)
+library(tidytext)
+
+source("data.R")
+source("analysis.R")
+```
+
+`data.R`
+```{r eval = F, echo = T}
+get_debate <- function() {
+  d <- read.csv("../processed_data/pres_debate.csv", header = T, stringsAsFactors = F)
+  return(d)
+}
+
+get_word_freq <- function() {
+  d <- read.csv("../processed_data/word_frequency_processed.csv", header = T, 
+                stringsAsFactors = F)
+  return(d)
+}
+
+get_verbs <- function() {
+  d <- read.csv("../processed_data/english_verbs_processed.csv", header = T, 
+                stringsAsFactors = F)
+  return(d)
+}
+```
+
+`analysis.R`
+```{r eval = F, echo = T}
+get_word_counts <- function(d, speaker) {
+  splitSen <- get_split_sen(d, speaker)
+  
+  wordCounts <- as.data.frame(table(splitSen), stringsAsFactors = F)
+  c("word", "count") -> names(wordCounts)
+  
+  return(wordCounts[3:nrow(wordCounts),]) 
+}
+
+total_word_counts <- function(d, speakers) {
+  splitSen <- get_split_sen(d, speakers[1])
+  for (i in 2:length(speakers))
+    splitSen <- c(splitSen, get_split_sen(d, speakers[i]))
+  
+  wordCounts <- as.data.frame(table(splitSen))
+  c("word", "count") -> names(wordCounts)
+  return(wordCounts[3:nrow(wordCounts),])
+}
+
+prepare_word_cloud <- function(d, speaker, trump = T, biden = T, 
+                               wallace = T, common = T, weightCommon = 1) {
+  speakr <- speaker
+  dplyr::filter(word_freq_data(d, trump, biden, wallace, common, weightCommon), 
+                speaker == toupper(speakr)) %>%
+    dplyr::select(-speaker, -tf, -idf, -count) -> out
+  c("word", "weight") -> names(out)
+  return(out)
+}
+
+get_split_sen <- function(d, speaker) {
+  speakr <- speaker
+  speakerSen <- dplyr::filter(d, speaker == toupper(speakr))$statement
+  splitSen <- unlist(strsplit(speakerSen, split=" "))
+  return(clean_words(splitSen))
+}
+
+clean_words <- function(words) {
+  get_verbs() -> verbs
+  toupper(words) %>% 
+    str_remove_all("[[:punct:]&&[^’]]|\\”|\\“|\\…|CROSSTALK|[[:digit:]]|[[:space:]]
+                   |N’T|’S|’M|’RE|’LL|’VE|’D|BIDEN|CHRIS|JOE") %>%
+      sort() -> words
+  
+  for(i in 2:5) {
+    which(verbs[[i]] %in% words) -> thisTense
+    for(j in 1:length(thisTense)) {
+      which(words %in% verbs[[i]][thisTense[j]]) -> thesePositions
+      words[thesePositions] <- verbs[[1]][thisTense[j]]
+    }
+  }
+  return(words)
+}
+
+word_freq_data <- function(d, trump = T, biden = T, wallace = T, common = T, weightCommon = 1) {
+  trumpWords <- ifelse(trump, get_words(d, "trump"))
+  bidenWords <- ifelse(biden, get_words(d, "biden"))
+  wallaceWords <- ifelse(wallace, get_words(d, "wallace"))
+  commonWords <- ifelse(common, data.frame(speaker = "COMMON", 
+                                           change_weight(get_word_freq(), weightCommon), 
+                                           stringsAsFactors = F))
+
+  allWords <- rbind(ifelse(trump, trumpWords), ifelse(biden, bidenWords), 
+                    ifelse(wallace, wallaceWords), ifelse(common, commonWords)) %>%
+    bind_tf_idf(word, speaker, count) %>%
+      arrange(desc(tf_idf))
+  return(allWords)
+}
+
+get_words <- function(d, spkr) {
+  return(data.frame(speaker = toupper(spkr), get_word_counts(d, spkr), stringsAsFactors = F))
+}
+
+change_weight <- function(d, newWeight = 1) {
+  d$count <- d$count * newWeight
+  return(d)
+}
+
+ifelse <- function(yesno, yay) {
+  if(yesno) return(yay)
+  else return(NA)
+}
+```
